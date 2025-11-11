@@ -34,6 +34,12 @@ function App() {
     contribution: ""
   });
 
+  // Which guest is being edited (null = adding new guest)
+  const [editingGuestId, setEditingGuestId] = useState(null);
+
+  // Guest filter: All, Invited, Confirmed, Declined
+  const [guestFilterStatus, setGuestFilterStatus] = useState("All");
+
   // Run once on load
   useEffect(() => {
     // Health check
@@ -59,6 +65,8 @@ function App() {
       status: "Invited",
       contribution: ""
     });
+    setEditingGuestId(null);
+    setGuestFilterStatus("All");
   }, [selectedEvent]);
 
   const fetchEvents = () => {
@@ -226,6 +234,12 @@ function App() {
           ...prev,
           [eventId]: data.guests || []
         }));
+        // keep events in sync for stats on dashboard
+        setEvents((prev) =>
+          prev.map((evt) =>
+            evt.id === eventId ? { ...evt, guests: data.guests || [] } : evt
+          )
+        );
       })
       .catch((err) => {
         console.error(err);
@@ -263,7 +277,7 @@ function App() {
     }));
   };
 
-  const handleAddGuest = (e) => {
+  const handleGuestSubmit = (e) => {
     e.preventDefault();
     if (!selectedEvent) return;
 
@@ -277,38 +291,94 @@ function App() {
       contribution: newGuest.contribution
     };
 
-    fetch(`http://localhost:4000/api/events/${selectedEvent.id}/guests`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json"
-      },
-      body: JSON.stringify(payload)
-    })
-      .then((res) => res.json())
-      .then((data) => {
-        if (!data.success) {
-          setEventError(data.message || "Failed to add guest");
-          return;
+    // If we have an editingGuestId, update; otherwise create
+    if (editingGuestId) {
+      fetch(
+        `http://localhost:4000/api/events/${selectedEvent.id}/guests/${editingGuestId}`,
+        {
+          method: "PUT",
+          headers: {
+            "Content-Type": "application/json"
+          },
+          body: JSON.stringify(payload)
         }
+      )
+        .then((res) => res.json())
+        .then((data) => {
+          if (!data.success) {
+            setEventError(data.message || "Failed to update guest");
+            return;
+          }
 
-        setGuestsByEvent((prev) => ({
-          ...prev,
-          [selectedEvent.id]: data.guests || []
-        }));
+          setGuestsByEvent((prev) => ({
+            ...prev,
+            [selectedEvent.id]: data.guests || []
+          }));
 
-        setNewGuest({
-          name: "",
-          phone: "",
-          status: "Invited",
-          contribution: ""
+          setEvents((prev) =>
+            prev.map((evt) =>
+              evt.id === selectedEvent.id
+                ? { ...evt, guests: data.guests || [] }
+                : evt
+            )
+          );
+
+          setNewGuest({
+            name: "",
+            phone: "",
+            status: "Invited",
+            contribution: ""
+          });
+          setEditingGuestId(null);
+          setEventSuccess("Guest updated ✅");
+        })
+        .catch((err) => {
+          console.error(err);
+          setEventError("Could not update guest.");
         });
-
-        setEventSuccess("Guest added 🎉");
+    } else {
+      // CREATE guest
+      fetch(`http://localhost:4000/api/events/${selectedEvent.id}/guests`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify(payload)
       })
-      .catch((err) => {
-        console.error(err);
-        setEventError("Could not add guest.");
-      });
+        .then((res) => res.json())
+        .then((data) => {
+          if (!data.success) {
+            setEventError(data.message || "Failed to add guest");
+            return;
+          }
+
+          setGuestsByEvent((prev) => ({
+            ...prev,
+            [selectedEvent.id]: data.guests || []
+          }));
+
+          setEvents((prev) =>
+            prev.map((evt) =>
+              evt.id === selectedEvent.id
+                ? { ...evt, guests: data.guests || [] }
+                : evt
+            )
+          );
+
+          setNewGuest({
+            name: "",
+            phone: "",
+            status: "Invited",
+            contribution: ""
+          });
+
+          setEventSuccess("Guest added 🎉");
+        })
+        .catch((err) => {
+          console.error(err);
+          setEventError("Could not add guest.");
+        });
+    }
   };
 
   const handleDeleteGuest = (eventId, guestId) => {
@@ -330,6 +400,23 @@ function App() {
           [eventId]: data.guests || []
         }));
 
+        setEvents((prev) =>
+          prev.map((evt) =>
+            evt.id === eventId ? { ...evt, guests: data.guests || [] } : evt
+          )
+        );
+
+        // if we were editing that guest, reset form
+        if (editingGuestId === guestId) {
+          setEditingGuestId(null);
+          setNewGuest({
+            name: "",
+            phone: "",
+            status: "Invited",
+            contribution: ""
+          });
+        }
+
         setEventSuccess("Guest removed ✅");
       })
       .catch((err) => {
@@ -338,9 +425,38 @@ function App() {
       });
   };
 
+  const handleEditGuestClick = (guest) => {
+    setEditingGuestId(guest.id);
+    setNewGuest({
+      name: guest.name || "",
+      phone: guest.phone || "",
+      status: guest.status || "Invited",
+      contribution: guest.contribution || ""
+    });
+  };
+
+  const handleCancelGuestEdit = () => {
+    setEditingGuestId(null);
+    setNewGuest({
+      name: "",
+      phone: "",
+      status: "Invited",
+      contribution: ""
+    });
+  };
+
   // 👉 SECOND SCREEN: Event Details + Guest list
   if (selectedEvent) {
-    const guests = guestsByEvent[selectedEvent.id] || [];
+    const allGuests = guestsByEvent[selectedEvent.id] || [];
+    const filteredGuests =
+      guestFilterStatus === "All"
+        ? allGuests
+        : allGuests.filter((g) => g.status === guestFilterStatus);
+
+    const totalGuests = allGuests.length;
+    const confirmedGuests = allGuests.filter(
+      (g) => g.status === "Confirmed"
+    ).length;
 
     return (
       <div className="app-root">
@@ -378,24 +494,26 @@ function App() {
               <h2>Event overview</h2>
               <p>
                 This is the details view for your event. In a future version,
-                this screen can show guest lists, budgets, playlists, and more.
+                this screen can show budgets, playlists, spraying and more.
               </p>
 
               <div className="details-grid">
                 <div className="details-stat">
                   <span className="stat-label">Guests</span>
                   <span className="stat-value">
-                    {guests.length || "—"}
+                    {totalGuests || "—"}
                   </span>
                   <span className="stat-caption">
                     Total people on your guest list
                   </span>
                 </div>
                 <div className="details-stat">
-                  <span className="stat-label">Budget</span>
-                  <span className="stat-value">—</span>
+                  <span className="stat-label">Confirmed</span>
+                  <span className="stat-value">
+                    {confirmedGuests || "—"}
+                  </span>
                   <span className="stat-caption">
-                    Coming soon: party budget
+                    Guests marked as &quot;Confirmed&quot;
                   </span>
                 </div>
                 <div className="details-stat">
@@ -410,44 +528,94 @@ function App() {
 
             {/* Guest list section */}
             <section className="details-section">
-              <h2>Guest list</h2>
+              <div className="guest-header-row">
+                <h2>Guest list</h2>
+                <div className="guest-filter-wrap">
+                  <span className="guest-count-label">
+                    {totalGuests} guests • {confirmedGuests} confirmed
+                  </span>
+                  <select
+                    className="guest-filter"
+                    value={guestFilterStatus}
+                    onChange={(e) => setGuestFilterStatus(e.target.value)}
+                  >
+                    <option value="All">All</option>
+                    <option value="Invited">Invited</option>
+                    <option value="Confirmed">Confirmed</option>
+                    <option value="Declined">Declined</option>
+                  </select>
+                </div>
+              </div>
 
-              {guests.length === 0 ? (
+              {filteredGuests.length === 0 ? (
                 <p className="muted-text">
-                  No guests added yet. Start building your list 🎉
+                  No guests in this view. Try a different filter or add a new
+                  guest 🎉
                 </p>
               ) : (
                 <div className="guest-table">
                   <div className="guest-row guest-row-header">
-                    <span>Name</span>
+                    <span>Guest</span>
                     <span>Status</span>
                     <span>Contribution</span>
                     <span></span>
                   </div>
-                  {guests.map((guest) => (
+                  {filteredGuests.map((guest) => (
                     <div className="guest-row" key={guest.id}>
-                      <span>{guest.name}</span>
+                      <span className="guest-name-cell">
+                        <span className="guest-avatar">
+                          {guest.name?.[0]?.toUpperCase() || "?"}
+                        </span>
+                        <span className="guest-name-block">
+                          <span className="guest-name">{guest.name}</span>
+                          {guest.phone && (
+                            <span className="guest-phone">{guest.phone}</span>
+                          )}
+                        </span>
+                      </span>
                       <span
                         className={`guest-status guest-status-${guest.status.toLowerCase()}`}
                       >
                         {guest.status}
                       </span>
                       <span>{guest.contribution || "—"}</span>
-                      <button
-                        type="button"
-                        className="btn btn-chip btn-delete"
-                        onClick={() =>
-                          handleDeleteGuest(selectedEvent.id, guest.id)
-                        }
-                      >
-                        Remove
-                      </button>
+                      <span className="guest-actions">
+                        <button
+                          type="button"
+                          className="btn btn-chip btn-edit"
+                          onClick={() => handleEditGuestClick(guest)}
+                        >
+                          Edit
+                        </button>
+                        <button
+                          type="button"
+                          className="btn btn-chip btn-delete"
+                          onClick={() =>
+                            handleDeleteGuest(selectedEvent.id, guest.id)
+                          }
+                        >
+                          Remove
+                        </button>
+                      </span>
                     </div>
                   ))}
                 </div>
               )}
 
-              <form className="guest-form" onSubmit={handleAddGuest}>
+              <form className="guest-form" onSubmit={handleGuestSubmit}>
+                {editingGuestId && (
+                  <div className="guest-editing-label">
+                    Editing guest –{" "}
+                    <button
+                      type="button"
+                      className="link-button"
+                      onClick={handleCancelGuestEdit}
+                    >
+                      cancel
+                    </button>
+                  </div>
+                )}
+
                 <div className="guest-form-row">
                   <input
                     type="text"
@@ -483,9 +651,20 @@ function App() {
                     placeholder="Contribution (e.g. ₦50k drinks)"
                   />
                 </div>
-                <button type="submit" className="btn btn-primary guest-submit">
-                  Add guest
-                </button>
+                <div className="guest-form-actions">
+                  <button type="submit" className="btn btn-primary guest-submit">
+                    {editingGuestId ? "Update guest ✅" : "Add guest 🎉"}
+                  </button>
+                  {editingGuestId && (
+                    <button
+                      type="button"
+                      className="btn btn-secondary guest-cancel-btn"
+                      onClick={handleCancelGuestEdit}
+                    >
+                      Cancel edit
+                    </button>
+                  )}
+                </div>
               </form>
             </section>
 
@@ -558,45 +737,59 @@ function App() {
             </p>
           ) : (
             <ul className="event-list">
-              {events.map((event) => (
-                <li key={event.id} className="event-card">
-                  <div className="event-main">
-                    <div className="event-title">{event.title}</div>
-                    <div className="event-meta">
-                      {event.date} • {event.location}
+              {events.map((event) => {
+                const guestsForEvent =
+                  guestsByEvent[event.id] || event.guests || [];
+                const total = guestsForEvent.length;
+                const confirmed = guestsForEvent.filter(
+                  (g) => g.status === "Confirmed"
+                ).length;
+
+                return (
+                  <li key={event.id} className="event-card">
+                    <div className="event-main">
+                      <div className="event-title">{event.title}</div>
+                      <div className="event-meta">
+                        {event.date} • {event.location}
+                      </div>
+                      <div className="event-host">
+                        Host: {event.hostName || "Unknown Host"}
+                      </div>
+                      <div className="event-stats-line">
+                        <span>{total} guests</span>
+                        <span className="dot-separator">•</span>
+                        <span>{confirmed} confirmed</span>
+                      </div>
                     </div>
-                    <div className="event-host">
-                      Host: {event.hostName || "Unknown Host"}
+                    <div className="event-actions">
+                      <span className="tag tag-owanbe">Owanbe 🎊</span>
+                      <div className="event-buttons">
+                        <button
+                          type="button"
+                          className="btn btn-chip btn-view"
+                          onClick={() => handleViewClick(event)}
+                        >
+                          View
+                        </button>
+                        <button
+                          type="button"
+                          className="btn btn-chip btn-edit"
+                          onClick={() => handleEditClick(event)}
+                        >
+                          Edit
+                        </button>
+                        <button
+                          type="button"
+                          className="btn btn-chip btn-delete"
+                          onClick={() => handleDeleteEvent(event.id)}
+                        >
+                          Delete
+                        </button>
+                      </div>
                     </div>
-                  </div>
-                  <div className="event-actions">
-                    <span className="tag tag-owanbe">Owanbe 🎊</span>
-                    <div className="event-buttons">
-                      <button
-                        type="button"
-                        className="btn btn-chip btn-view"
-                        onClick={() => handleViewClick(event)}
-                      >
-                        View
-                      </button>
-                      <button
-                        type="button"
-                        className="btn btn-chip btn-edit"
-                        onClick={() => handleEditClick(event)}
-                      >
-                        Edit
-                      </button>
-                      <button
-                        type="button"
-                        className="btn btn-chip btn-delete"
-                        onClick={() => handleDeleteEvent(event.id)}
-                      >
-                        Delete
-                      </button>
-                    </div>
-                  </div>
-                </li>
-              ))}
+                  </li>
+                );
+              })}
             </ul>
           )}
         </div>

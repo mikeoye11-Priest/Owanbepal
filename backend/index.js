@@ -12,7 +12,10 @@ app.use(cors());
 app.use(express.json());
 
 // In-memory events store
-// Each event: { id, title, date, location, hostName, guests: [ { id, name, phone, status, contribution } ] }
+// Each event: {
+//   id, title, date, location, hostName,
+//   guests: [ { id, name, phone, status, contribution } ]
+// }
 let events = [];
 
 // Health check
@@ -49,7 +52,7 @@ app.post("/api/events", (req, res) => {
     date,
     location,
     hostName: hostName || "",
-    guests: [], // 👈 start with empty guest list
+    guests: [], // start with empty guests
   };
 
   events.push(newEvent);
@@ -73,7 +76,6 @@ app.put("/api/events/:id", (req, res) => {
     });
   }
 
-  // Keep existing guests
   const existingEvent = events[index];
 
   events[index] = {
@@ -111,7 +113,7 @@ app.delete("/api/events/:id", (req, res) => {
 });
 
 //
-// 👇 NEW: Guest routes
+// 👇 Guest routes
 //
 
 // Get guests for an event
@@ -168,6 +170,49 @@ app.post("/api/events/:id/guests", (req, res) => {
   res.status(201).json({
     success: true,
     guest: newGuest,
+    guests: event.guests,
+  });
+});
+
+// Update guest on an event
+app.put("/api/events/:eventId/guests/:guestId", (req, res) => {
+  const { eventId, guestId } = req.params;
+  const { name, phone, status, contribution } = req.body || {};
+
+  const event = events.find((evt) => evt.id === eventId);
+  if (!event) {
+    return res.status(404).json({
+      success: false,
+      message: "Event not found",
+    });
+  }
+
+  if (!Array.isArray(event.guests)) {
+    event.guests = [];
+  }
+
+  const index = event.guests.findIndex((g) => g.id === guestId);
+  if (index === -1) {
+    return res.status(404).json({
+      success: false,
+      message: "Guest not found",
+    });
+  }
+
+  const existing = event.guests[index];
+
+  event.guests[index] = {
+    ...existing,
+    name: name !== undefined ? name.trim() : existing.name,
+    phone: phone !== undefined ? phone.trim() : existing.phone,
+    status: status !== undefined ? status : existing.status,
+    contribution:
+      contribution !== undefined ? contribution.trim() : existing.contribution,
+  };
+
+  res.json({
+    success: true,
+    guest: event.guests[index],
     guests: event.guests,
   });
 });
